@@ -1,0 +1,80 @@
+name: Build macOS App
+
+# Two ways to run this:
+# 1. Automatically - whenever you push a tag like "v9" (git tag v9 && git push --tags)
+# 2. Manually - go to the "Actions" tab on GitHub -> "Build macOS App" -> "Run workflow"
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-mac:
+    runs-on: macos-latest   # <-- this is the free Apple machine GitHub gives you
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pymupdf pillow pyinstaller
+
+      # Optional: only runs if you add an "icon.png" (ideally 1024x1024) to the repo root.
+      # If it's missing, this step just skips - no icon, no error.
+      - name: Build app icon (icon.icns) from icon.png, if present
+        run: |
+          if [ -f icon.png ]; then
+            mkdir -p icon.iconset
+            sips -z 16 16     icon.png --out icon.iconset/icon_16x16.png
+            sips -z 32 32     icon.png --out icon.iconset/icon_16x16@2x.png
+            sips -z 32 32     icon.png --out icon.iconset/icon_32x32.png
+            sips -z 64 64     icon.png --out icon.iconset/icon_32x32@2x.png
+            sips -z 128 128   icon.png --out icon.iconset/icon_128x128.png
+            sips -z 256 256   icon.png --out icon.iconset/icon_128x128@2x.png
+            sips -z 256 256   icon.png --out icon.iconset/icon_256x256.png
+            sips -z 512 512   icon.png --out icon.iconset/icon_256x256@2x.png
+            sips -z 512 512   icon.png --out icon.iconset/icon_512x512.png
+            cp icon.png icon.iconset/icon_512x512@2x.png
+            iconutil -c icns icon.iconset -o icon.icns
+            echo "ICON_FLAG=--icon icon.icns" >> "$GITHUB_ENV"
+          else
+            echo "ICON_FLAG=" >> "$GITHUB_ENV"
+            echo "No icon.png found in repo root - building without a custom icon."
+          fi
+
+      # --collect-all pymupdf: PyMuPDF ships its own compiled libraries that
+      # PyInstaller's automatic scanner sometimes misses - this forces
+      # everything it needs to be bundled, avoiding a "module not found"
+      # crash the first time someone opens the app on their Mac.
+      - name: Build .app with PyInstaller
+        run: >
+          pyinstaller --windowed --onedir --noconfirm
+          --name "MiniAcrobat"
+          --collect-all pymupdf
+          ${{ env.ICON_FLAG }}
+          pdf_reader_v9.py
+
+      - name: Package as .dmg
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "Mini Acrobat" \
+            --window-size 500 300 \
+            --icon-size 100 \
+            --app-drop-link 380 120 \
+            "MiniAcrobat.dmg" \
+            "dist/MiniAcrobat.app"
+
+      - name: Upload the .dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: MiniAcrobat-mac
+          path: MiniAcrobat.dmg
